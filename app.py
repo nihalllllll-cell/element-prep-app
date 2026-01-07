@@ -1,35 +1,62 @@
 import streamlit as st
-from rembg import remove
 from PIL import Image
-import torch
+from rembg import remove
 import io
-from realesrgan import RealESRGANer
-import numpy as np
+import requests
 
-st.title("One-Click Element Prep")
+st.set_page_config(page_title="BG Remover & Upscaler", layout="centered")
 
-file = st.file_uploader("Upload image", ["png", "jpg", "jpeg"])
-if file:
-    img = Image.open(file).convert("RGB")
-    st.image(img, caption="Original")
+st.title("🎨 Background Remover & Upscaler")
+st.write("Remove backgrounds and upscale images in one go!")
 
-    remove_bg = st.checkbox("Remove background")
-    upscale = st.checkbox("Upscale 4×")
+uploaded_file = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
 
-    if st.button("Process"):
-        result_img = img
+if uploaded_file:
+    # Display original image
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Original Image", use_container_width=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        remove_bg = st.checkbox("Remove Background", value=True)
+    
+    with col2:
+        upscale = st.checkbox("Upscale Image (2x)", value=True)
+    
+    if st.button("Process Image", type="primary"):
+        with st.spinner("Processing..."):
+            result_img = image.copy()
+            
+            # Step 1: Remove background if selected
+            if remove_bg:
+                st.info("Removing background...")
+                # Reset file pointer
+                uploaded_file.seek(0)
+                img_bytes = uploaded_file.read()
+                output = remove(img_bytes)
+                result_img = Image.open(io.BytesIO(output))
+            
+            # Step 2: Upscale if selected
+            if upscale:
+                st.info("Upscaling image...")
+                original_size = result_img.size
+                new_size = (original_size[0] * 2, original_size[1] * 2)
+                result_img = result_img.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # Display result
+            st.success("Done!")
+            st.image(result_img, caption="Processed Image", use_container_width=True)
+            
+            # Download button
+            buf = io.BytesIO()
+            result_img.save(buf, format="PNG")
+            st.download_button(
+                "⬇️ Download Processed Image",
+                data=buf.getvalue(),
+                file_name="processed_image.png",
+                mime="image/png"
+            )
 
-        if remove_bg:
-            result_img = Image.open(io.BytesIO(remove(result_img)))
-
-        if upscale:
-            st.info("Upscaling…")
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            upscaler = RealESRGANer(scale=4, model_path=None, device=device)
-            result_np = np.array(result_img)
-            result_np, _ = upscaler.enhance(result_np, outscale=4)
-            result_img = Image.fromarray(result_np)
-
-        buf = io.BytesIO()
-        result_img.save(buf, "PNG")
-        st.download_button("Download", buf.getvalue(), "element.png", "image/png")
+st.markdown("---")
+st.caption("Made with ❤️ to save time on creative work")
