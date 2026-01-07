@@ -151,6 +151,64 @@ st.markdown("""
         border-radius: 10px;
     }
     
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, rgba(102, 126, 234, 0.95) 0%, rgba(118, 75, 162, 0.95) 100%);
+        backdrop-filter: blur(10px);
+    }
+    
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3 {
+        color: white;
+        font-weight: 600;
+        font-size: 1.3rem;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+    }
+    
+    [data-testid="stSidebar"] .stRadio > label {
+        color: white !important;
+        font-weight: 500;
+        font-size: 0.95rem;
+    }
+    
+    [data-testid="stSidebar"] .stRadio [role="radiogroup"] {
+        gap: 0.8rem;
+    }
+    
+    [data-testid="stSidebar"] .stRadio [role="radiogroup"] label {
+        background: rgba(255, 255, 255, 0.15);
+        backdrop-filter: blur(10px);
+        padding: 0.8rem 1rem;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        transition: all 0.3s ease;
+        color: white !important;
+        font-weight: 400;
+    }
+    
+    [data-testid="stSidebar"] .stRadio [role="radiogroup"] label:hover {
+        background: rgba(255, 255, 255, 0.25);
+        transform: translateX(4px);
+    }
+    
+    [data-testid="stSidebar"] .stSelectbox > label {
+        color: white !important;
+        font-weight: 500;
+        font-size: 0.95rem;
+    }
+    
+    [data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] {
+        background: rgba(255, 255, 255, 0.15);
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    [data-testid="stSidebar"] hr {
+        border-color: rgba(255, 255, 255, 0.2);
+        margin: 1.5rem 0;
+    }
+    
     hr {
         margin: 2rem 0;
         border: none;
@@ -278,34 +336,35 @@ with st.sidebar:
     st.markdown("### ⚡ Quick Presets")
     
     preset = st.radio(
-        "Choose a workflow:",
-        ["Custom", "Social Media Post", "Print Design", "Web Graphics", "Product Shot", "Maximum Quality"],
-        help="Pre-configured settings for common use cases"
+        "Choose workflow",
+        ["Custom", "Social Media", "Print Design", "Web Graphics", "Product Shot", "Max Quality"],
+        help="Pre-configured settings"
     )
     
     st.markdown("---")
-    st.markdown("### 🎯 Export Options")
+    st.markdown("### 🎯 Export")
     
     output_format = st.selectbox(
-        "Output Format",
-        ["PNG (Transparent)", "PNG (White BG)", "PNG (Black BG)", "JPEG (White BG)", "WEBP"],
-        help="Choose your export format"
+        "Format",
+        ["PNG (Transparent)", "PNG (White BG)", "JPEG", "WEBP"],
+        help="Output format"
     )
     
     if "JPEG" not in output_format and "WEBP" not in output_format:
         export_size = st.radio(
-            "Export Size",
-            ["Original", "1080p (Social)", "2K", "4K", "8K", "Custom"],
-            help="Scale to common sizes"
+            "Size",
+            ["Original", "1080p", "2K", "4K", "Custom"],
+            help="Export dimensions"
         )
         
         if export_size == "Custom":
-            custom_width = st.number_input("Width (px)", min_value=100, max_value=16000, value=2000)
-            custom_height = st.number_input("Height (px)", min_value=100, max_value=16000, value=2000)
+            st.markdown("**Custom Dimensions**")
+            custom_width = st.number_input("Width", min_value=100, max_value=16000, value=2000)
+            custom_height = st.number_input("Height", min_value=100, max_value=16000, value=2000)
 
 # Preset configurations
 preset_configs = {
-    "Social Media Post": {
+    "Social Media": {
         "remove_bg": True,
         "upscale_factor": 2,
         "enhance_quality": True,
@@ -338,7 +397,7 @@ preset_configs = {
         "add_padding": True,
         "denoise": True
     },
-    "Maximum Quality": {
+    "Max Quality": {
         "remove_bg": True,
         "upscale_factor": 4,
         "enhance_quality": True,
@@ -361,13 +420,21 @@ with col_upload:
 
 with col_info:
     if preset != "Custom":
-        st.markdown("### 📋 Preset Features")
+        st.markdown("### 📋 Active Features")
         config = preset_configs[preset]
-        for key, value in config.items():
-            if value is True:
-                st.markdown(f"✓ {key.replace('_', ' ').title()}")
-            elif isinstance(value, (int, float)):
-                st.markdown(f"✓ {key.replace('_', ' ').title()}: {value}")
+        feature_list = []
+        if config.get("remove_bg"): feature_list.append("✓ Background Removal")
+        if config.get("upscale_factor", 1) > 1: feature_list.append(f"✓ {config['upscale_factor']}x Upscale")
+        if config.get("enhance_quality"): feature_list.append("✓ Quality Boost")
+        if config.get("auto_crop"): feature_list.append("✓ Auto Crop")
+        if config.get("add_shadow"): feature_list.append("✓ Drop Shadow")
+        if config.get("denoise"): feature_list.append("✓ Denoise")
+        
+        for feature in feature_list:
+            st.markdown(f"{feature}")
+    else:
+        st.markdown("### 💡 Tips")
+        st.markdown("Use presets for quick results or go custom for full control!")
 
 if uploaded_file:
     # Load and display original image
@@ -607,14 +674,12 @@ if uploaded_file:
                 # Handle export sizing
                 export_img = result_img.copy()
                 if 'export_size' in locals() and export_size != "Original":
-                    if export_size == "1080p (Social)":
+                    if export_size == "1080p":
                         target_size = (1080, 1080)
                     elif export_size == "2K":
                         target_size = (2048, 2048)
                     elif export_size == "4K":
                         target_size = (3840, 3840)
-                    elif export_size == "8K":
-                        target_size = (7680, 7680)
                     elif export_size == "Custom":
                         target_size = (custom_width, custom_height)
                     else:
@@ -638,16 +703,7 @@ if uploaded_file:
                     export_img.save(buf, format="PNG")
                     mime_type = "image/png"
                     file_ext = "png"
-                elif output_format == "PNG (Black BG)":
-                    if export_img.mode == 'RGBA':
-                        bg = Image.new('RGB', export_img.size, (0, 0, 0))
-                        bg.paste(export_img, mask=export_img.split()[3])
-                        export_img = bg
-                    buf = io.BytesIO()
-                    export_img.save(buf, format="PNG")
-                    mime_type = "image/png"
-                    file_ext = "png"
-                elif output_format == "JPEG (White BG)":
+                elif output_format == "JPEG":
                     if export_img.mode in ('RGBA', 'LA', 'P'):
                         bg = Image.new('RGB', export_img.size, (255, 255, 255))
                         if export_img.mode == 'P':
