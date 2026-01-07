@@ -1,14 +1,16 @@
 import streamlit as st
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageFont
 from rembg import remove
 import io
+import numpy as np
+from typing import Tuple
 
 # Page config with custom theme
 st.set_page_config(
-    page_title="Element Prep Studio",
+    page_title="Element Prep Studio Pro",
     page_icon="✨",
-    layout="centered",
-    initial_sidebar_state="collapsed"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # Custom CSS for aesthetic UI
@@ -174,74 +176,315 @@ st.markdown("""
         margin: 1rem 0;
         border: 1px solid rgba(255, 255, 255, 0.2);
     }
+    
+    .preset-card {
+        background: rgba(255, 255, 255, 0.15);
+        backdrop-filter: blur(10px);
+        padding: 1rem;
+        border-radius: 12px;
+        margin: 0.5rem 0;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .preset-card:hover {
+        background: rgba(255, 255, 255, 0.25);
+        transform: translateY(-2px);
+    }
     </style>
 """, unsafe_allow_html=True)
+
+# Helper functions
+def add_shadow(image: Image.Image, offset: Tuple[int, int] = (5, 5), 
+               blur: int = 10, opacity: int = 128) -> Image.Image:
+    """Add drop shadow to image with transparency"""
+    if image.mode != 'RGBA':
+        image = image.convert('RGBA')
+    
+    # Create shadow layer
+    shadow = Image.new('RGBA', image.size, (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(shadow)
+    
+    # Get alpha channel
+    alpha = image.split()[3]
+    shadow.paste(Image.new('RGBA', image.size, (0, 0, 0, opacity)), mask=alpha)
+    
+    # Blur shadow
+    shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
+    
+    # Create new image with shadow
+    total_size = (image.size[0] + abs(offset[0]) + blur * 2,
+                  image.size[1] + abs(offset[1]) + blur * 2)
+    result = Image.new('RGBA', total_size, (0, 0, 0, 0))
+    
+    shadow_pos = (blur + max(0, offset[0]), blur + max(0, offset[1]))
+    image_pos = (blur + max(0, -offset[0]), blur + max(0, -offset[1]))
+    
+    result.paste(shadow, shadow_pos)
+    result.paste(image, image_pos, image)
+    
+    return result
+
+def add_padding(image: Image.Image, padding: int, color=(0, 0, 0, 0)) -> Image.Image:
+    """Add padding around image"""
+    new_size = (image.size[0] + 2 * padding, image.size[1] + 2 * padding)
+    result = Image.new(image.mode, new_size, color)
+    result.paste(image, (padding, padding))
+    return result
+
+def auto_crop_transparent(image: Image.Image, margin: int = 0) -> Image.Image:
+    """Auto-crop image to content with optional margin"""
+    if image.mode != 'RGBA':
+        return image
+    
+    # Get bounding box of non-transparent pixels
+    bbox = image.getbbox()
+    if bbox:
+        # Add margin
+        bbox = (max(0, bbox[0] - margin),
+                max(0, bbox[1] - margin),
+                min(image.size[0], bbox[2] + margin),
+                min(image.size[1], bbox[3] + margin))
+        return image.crop(bbox)
+    return image
+
+def smart_denoise(image: Image.Image, strength: int = 2) -> Image.Image:
+    """Intelligent noise reduction"""
+    return image.filter(ImageFilter.MedianFilter(size=strength * 2 + 1))
+
+def edge_enhance(image: Image.Image, factor: float = 1.5) -> Image.Image:
+    """Enhance edges for crisp elements"""
+    enhanced = image.filter(ImageFilter.EDGE_ENHANCE_MORE)
+    return Image.blend(image, enhanced, factor / 10)
+
+def color_pop(image: Image.Image, saturation: float = 1.5) -> Image.Image:
+    """Boost color saturation"""
+    if image.mode != 'RGB' and image.mode != 'RGBA':
+        return image
+    enhancer = ImageEnhance.Color(image)
+    return enhancer.enhance(saturation)
 
 # Header
 st.markdown("""
     <div class="title-container">
-        <h1 class="title-text">✨ Element Prep Studio</h1>
-        <p class="subtitle-text">Remove backgrounds, upscale, and enhance images in seconds</p>
+        <h1 class="title-text">✨ Element Prep Studio Pro</h1>
+        <p class="subtitle-text">All your design prep work in one place - remove backgrounds, enhance, and export perfectly</p>
     </div>
 """, unsafe_allow_html=True)
 
-# File uploader
-uploaded_file = st.file_uploader(
-    "Drop your image here or click to browse",
-    type=["png", "jpg", "jpeg", "webp"],
-    help="Supported formats: PNG, JPG, JPEG, WEBP"
-)
+# Sidebar with presets and batch options
+with st.sidebar:
+    st.markdown("### ⚡ Quick Presets")
+    
+    preset = st.radio(
+        "Choose a workflow:",
+        ["Custom", "Social Media Post", "Print Design", "Web Graphics", "Product Shot", "Maximum Quality"],
+        help="Pre-configured settings for common use cases"
+    )
+    
+    st.markdown("---")
+    st.markdown("### 🎯 Export Options")
+    
+    output_format = st.selectbox(
+        "Output Format",
+        ["PNG (Transparent)", "PNG (White BG)", "PNG (Black BG)", "JPEG (White BG)", "WEBP"],
+        help="Choose your export format"
+    )
+    
+    if "JPEG" not in output_format and "WEBP" not in output_format:
+        export_size = st.radio(
+            "Export Size",
+            ["Original", "1080p (Social)", "2K", "4K", "8K", "Custom"],
+            help="Scale to common sizes"
+        )
+        
+        if export_size == "Custom":
+            custom_width = st.number_input("Width (px)", min_value=100, max_value=16000, value=2000)
+            custom_height = st.number_input("Height (px)", min_value=100, max_value=16000, value=2000)
+
+# Preset configurations
+preset_configs = {
+    "Social Media Post": {
+        "remove_bg": True,
+        "upscale_factor": 2,
+        "enhance_quality": True,
+        "sharpness": 1.5,
+        "auto_crop": True,
+        "add_shadow": True,
+        "color_boost": True
+    },
+    "Print Design": {
+        "remove_bg": True,
+        "upscale_factor": 4,
+        "enhance_quality": True,
+        "sharpness": 2.0,
+        "denoise": True,
+        "color_boost": True
+    },
+    "Web Graphics": {
+        "remove_bg": True,
+        "upscale_factor": 2,
+        "enhance_quality": True,
+        "sharpness": 1.2,
+        "auto_crop": True
+    },
+    "Product Shot": {
+        "remove_bg": True,
+        "upscale_factor": 3,
+        "enhance_quality": True,
+        "sharpness": 2.0,
+        "add_shadow": True,
+        "add_padding": True,
+        "denoise": True
+    },
+    "Maximum Quality": {
+        "remove_bg": True,
+        "upscale_factor": 4,
+        "enhance_quality": True,
+        "sharpness": 2.5,
+        "denoise": True,
+        "color_boost": True,
+        "edge_enhance": True
+    }
+}
+
+# Main content
+col_upload, col_info = st.columns([2, 1])
+
+with col_upload:
+    uploaded_file = st.file_uploader(
+        "Drop your image here or click to browse",
+        type=["png", "jpg", "jpeg", "webp"],
+        help="Supported formats: PNG, JPG, JPEG, WEBP"
+    )
+
+with col_info:
+    if preset != "Custom":
+        st.markdown("### 📋 Preset Features")
+        config = preset_configs[preset]
+        for key, value in config.items():
+            if value is True:
+                st.markdown(f"✓ {key.replace('_', ' ').title()}")
+            elif isinstance(value, (int, float)):
+                st.markdown(f"✓ {key.replace('_', ' ').title()}: {value}")
 
 if uploaded_file:
     # Load and display original image
     image = Image.open(uploaded_file)
     original_size = image.size
     
+    # Display original
     st.markdown("### 📸 Original Image")
-    st.image(image, use_container_width=True)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image(image, use_container_width=True)
     
     st.markdown(f"""
         <div class="info-box">
-            <strong>Image Info:</strong> {original_size[0]} × {original_size[1]} pixels
+            <strong>Image Info:</strong> {original_size[0]} × {original_size[1]} pixels | 
+            {image.mode} | {round(uploaded_file.size / 1024, 1)} KB
         </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
     
     # Features section
-    st.markdown("### 🎨 Choose Your Enhancements")
+    st.markdown("### 🎨 Enhancement Options")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        remove_bg = st.checkbox("🎭 Remove Background", value=True, help="AI-powered background removal")
-        enhance_quality = st.checkbox("✨ Enhance Quality", value=False, help="Improve sharpness and clarity")
-    
-    with col2:
-        upscale = st.checkbox("📈 Upscale Image", value=True, help="Increase resolution 2x or 4x")
-        adjust_colors = st.checkbox("🎨 Adjust Colors", value=False, help="Fine-tune brightness and contrast")
-    
-    # Advanced options
-    if upscale:
-        st.markdown("#### Upscale Options")
-        upscale_factor = st.select_slider(
-            "Upscale Factor",
-            options=[2, 3, 4],
-            value=2,
-            help="How much to increase the image size"
-        )
-    
-    if adjust_colors:
-        st.markdown("#### Color Adjustments")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.1)
-        with col_b:
-            contrast = st.slider("Contrast", 0.5, 2.0, 1.0, 0.1)
-    
-    if enhance_quality:
-        st.markdown("#### Quality Enhancement")
-        sharpness = st.slider("Sharpness", 0.0, 3.0, 1.5, 0.1)
+    # Apply preset or custom settings
+    if preset != "Custom":
+        config = preset_configs[preset]
+        remove_bg = config.get("remove_bg", False)
+        upscale = config.get("upscale_factor", 2) > 1
+        upscale_factor = config.get("upscale_factor", 2)
+        enhance_quality = config.get("enhance_quality", False)
+        sharpness = config.get("sharpness", 1.5)
+        adjust_colors = config.get("adjust_colors", False)
+        auto_crop = config.get("auto_crop", False)
+        add_shadow_effect = config.get("add_shadow", False)
+        denoise = config.get("denoise", False)
+        color_boost = config.get("color_boost", False)
+        edge_enhance_effect = config.get("edge_enhance", False)
+        add_padding_effect = config.get("add_padding", False)
+        
+        st.info(f"🎯 Using **{preset}** preset - all settings optimized!")
+    else:
+        # Custom controls
+        tab1, tab2, tab3 = st.tabs(["🎭 Basic", "✨ Advanced", "🎨 Effects"])
+        
+        with tab1:
+            col1, col2 = st.columns(2)
+            with col1:
+                remove_bg = st.checkbox("🎭 Remove Background", value=True, 
+                                       help="AI-powered background removal")
+                enhance_quality = st.checkbox("✨ Enhance Quality", value=False, 
+                                             help="Improve sharpness and clarity")
+            with col2:
+                upscale = st.checkbox("📈 Upscale Image", value=True, 
+                                     help="Increase resolution 2x, 3x, or 4x")
+                adjust_colors = st.checkbox("🎨 Adjust Colors", value=False, 
+                                           help="Fine-tune brightness and contrast")
+            
+            if upscale:
+                upscale_factor = st.select_slider(
+                    "Upscale Factor",
+                    options=[2, 3, 4, 5],
+                    value=2,
+                    help="How much to increase the image size"
+                )
+            else:
+                upscale_factor = 1
+            
+            if enhance_quality:
+                sharpness = st.slider("Sharpness", 0.0, 3.0, 1.5, 0.1)
+            else:
+                sharpness = 1.0
+        
+        with tab2:
+            col1, col2 = st.columns(2)
+            with col1:
+                auto_crop = st.checkbox("✂️ Auto-Crop to Content", value=False,
+                                       help="Remove empty space around element")
+                denoise = st.checkbox("🧹 Denoise", value=False,
+                                     help="Reduce image noise and grain")
+            with col2:
+                edge_enhance_effect = st.checkbox("🔲 Edge Enhancement", value=False,
+                                                 help="Make edges crisper")
+                color_boost = st.checkbox("🌈 Color Boost", value=False,
+                                         help="Increase color saturation")
+            
+            if adjust_colors:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.1)
+                    saturation = st.slider("Saturation", 0.5, 2.0, 1.0, 0.1)
+                with col_b:
+                    contrast = st.slider("Contrast", 0.5, 2.0, 1.0, 0.1)
+            else:
+                brightness = 1.0
+                contrast = 1.0
+                saturation = 1.0
+        
+        with tab3:
+            col1, col2 = st.columns(2)
+            with col1:
+                add_shadow_effect = st.checkbox("🌑 Add Drop Shadow", value=False,
+                                               help="Add professional shadow effect")
+                if add_shadow_effect:
+                    shadow_blur = st.slider("Shadow Blur", 5, 30, 10)
+                    shadow_opacity = st.slider("Shadow Opacity", 50, 255, 128)
+                else:
+                    shadow_blur = 10
+                    shadow_opacity = 128
+            
+            with col2:
+                add_padding_effect = st.checkbox("📐 Add Padding", value=False,
+                                                help="Add space around the element")
+                if add_padding_effect:
+                    padding_size = st.slider("Padding Size", 10, 200, 50)
+                else:
+                    padding_size = 0
     
     st.markdown("---")
     
@@ -252,42 +495,90 @@ if uploaded_file:
                 result_img = image.copy()
                 steps_completed = []
                 
+                # Progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
                 # Step 1: Remove background
                 if remove_bg:
-                    with st.spinner("🎭 Removing background..."):
-                        uploaded_file.seek(0)
-                        img_bytes = uploaded_file.read()
-                        output = remove(img_bytes)
-                        result_img = Image.open(io.BytesIO(output))
-                        steps_completed.append("Background removed")
+                    status_text.text("🎭 Removing background...")
+                    progress_bar.progress(10)
+                    uploaded_file.seek(0)
+                    img_bytes = uploaded_file.read()
+                    output = remove(img_bytes)
+                    result_img = Image.open(io.BytesIO(output))
+                    steps_completed.append("Background removed")
+                    progress_bar.progress(25)
                 
-                # Step 2: Enhance quality
+                # Step 2: Auto-crop
+                if auto_crop and result_img.mode == 'RGBA':
+                    status_text.text("✂️ Auto-cropping...")
+                    result_img = auto_crop_transparent(result_img, margin=10)
+                    steps_completed.append("Auto-cropped")
+                    progress_bar.progress(35)
+                
+                # Step 3: Denoise
+                if denoise:
+                    status_text.text("🧹 Denoising...")
+                    result_img = smart_denoise(result_img)
+                    steps_completed.append("Denoised")
+                    progress_bar.progress(45)
+                
+                # Step 4: Edge enhancement
+                if edge_enhance_effect:
+                    status_text.text("🔲 Enhancing edges...")
+                    result_img = edge_enhance(result_img, 1.5)
+                    steps_completed.append("Edges enhanced")
+                    progress_bar.progress(55)
+                
+                # Step 5: Enhance quality
                 if enhance_quality:
-                    with st.spinner("✨ Enhancing quality..."):
-                        enhancer = ImageEnhance.Sharpness(result_img)
-                        result_img = enhancer.enhance(sharpness)
-                        steps_completed.append("Quality enhanced")
+                    status_text.text("✨ Enhancing quality...")
+                    enhancer = ImageEnhance.Sharpness(result_img)
+                    result_img = enhancer.enhance(sharpness)
+                    steps_completed.append("Quality enhanced")
+                    progress_bar.progress(65)
                 
-                # Step 3: Color adjustments
-                if adjust_colors:
-                    with st.spinner("🎨 Adjusting colors..."):
-                        # Brightness
+                # Step 6: Color adjustments
+                if adjust_colors or color_boost:
+                    status_text.text("🎨 Adjusting colors...")
+                    if adjust_colors:
                         enhancer = ImageEnhance.Brightness(result_img)
                         result_img = enhancer.enhance(brightness)
-                        # Contrast
                         enhancer = ImageEnhance.Contrast(result_img)
                         result_img = enhancer.enhance(contrast)
-                        steps_completed.append("Colors adjusted")
+                    if color_boost:
+                        result_img = color_pop(result_img, 1.3)
+                    steps_completed.append("Colors adjusted")
+                    progress_bar.progress(75)
                 
-                # Step 4: Upscale
-                if upscale:
-                    with st.spinner("📈 Upscaling image..."):
-                        new_size = (
-                            original_size[0] * upscale_factor,
-                            original_size[1] * upscale_factor
-                        )
-                        result_img = result_img.resize(new_size, Image.Resampling.LANCZOS)
-                        steps_completed.append(f"Upscaled {upscale_factor}x")
+                # Step 7: Upscale
+                if upscale and upscale_factor > 1:
+                    status_text.text("📈 Upscaling image...")
+                    new_size = (
+                        int(result_img.size[0] * upscale_factor),
+                        int(result_img.size[1] * upscale_factor)
+                    )
+                    result_img = result_img.resize(new_size, Image.Resampling.LANCZOS)
+                    steps_completed.append(f"Upscaled {upscale_factor}x")
+                    progress_bar.progress(85)
+                
+                # Step 8: Add effects
+                if add_shadow_effect and result_img.mode == 'RGBA':
+                    status_text.text("🌑 Adding shadow...")
+                    result_img = add_shadow(result_img, offset=(5, 5), 
+                                          blur=shadow_blur, opacity=shadow_opacity)
+                    steps_completed.append("Shadow added")
+                    progress_bar.progress(92)
+                
+                if add_padding_effect:
+                    status_text.text("📐 Adding padding...")
+                    result_img = add_padding(result_img, padding_size)
+                    steps_completed.append("Padding added")
+                    progress_bar.progress(96)
+                
+                progress_bar.progress(100)
+                status_text.text("✅ Complete!")
                 
                 # Success message
                 st.markdown(f"""
@@ -298,7 +589,9 @@ if uploaded_file:
                 
                 # Display result
                 st.markdown("### 🎉 Processed Image")
-                st.image(result_img, use_container_width=True)
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    st.image(result_img, use_container_width=True)
                 
                 final_size = result_img.size
                 st.markdown(f"""
@@ -311,37 +604,75 @@ if uploaded_file:
                 # Download options
                 st.markdown("### 💾 Download Your Image")
                 
-                col_dl1, col_dl2 = st.columns(2)
+                # Handle export sizing
+                export_img = result_img.copy()
+                if 'export_size' in locals() and export_size != "Original":
+                    if export_size == "1080p (Social)":
+                        target_size = (1080, 1080)
+                    elif export_size == "2K":
+                        target_size = (2048, 2048)
+                    elif export_size == "4K":
+                        target_size = (3840, 3840)
+                    elif export_size == "8K":
+                        target_size = (7680, 7680)
+                    elif export_size == "Custom":
+                        target_size = (custom_width, custom_height)
+                    else:
+                        target_size = export_img.size
+                    
+                    if target_size != export_img.size:
+                        export_img = export_img.resize(target_size, Image.Resampling.LANCZOS)
                 
-                with col_dl1:
-                    # PNG download
-                    buf_png = io.BytesIO()
-                    result_img.save(buf_png, format="PNG")
-                    st.download_button(
-                        "⬇️ Download PNG",
-                        data=buf_png.getvalue(),
-                        file_name="element_prep_result.png",
-                        mime="image/png",
-                        use_container_width=True
-                    )
+                # Prepare download based on format
+                if output_format == "PNG (Transparent)":
+                    buf = io.BytesIO()
+                    export_img.save(buf, format="PNG")
+                    mime_type = "image/png"
+                    file_ext = "png"
+                elif output_format == "PNG (White BG)":
+                    if export_img.mode == 'RGBA':
+                        bg = Image.new('RGB', export_img.size, (255, 255, 255))
+                        bg.paste(export_img, mask=export_img.split()[3])
+                        export_img = bg
+                    buf = io.BytesIO()
+                    export_img.save(buf, format="PNG")
+                    mime_type = "image/png"
+                    file_ext = "png"
+                elif output_format == "PNG (Black BG)":
+                    if export_img.mode == 'RGBA':
+                        bg = Image.new('RGB', export_img.size, (0, 0, 0))
+                        bg.paste(export_img, mask=export_img.split()[3])
+                        export_img = bg
+                    buf = io.BytesIO()
+                    export_img.save(buf, format="PNG")
+                    mime_type = "image/png"
+                    file_ext = "png"
+                elif output_format == "JPEG (White BG)":
+                    if export_img.mode in ('RGBA', 'LA', 'P'):
+                        bg = Image.new('RGB', export_img.size, (255, 255, 255))
+                        if export_img.mode == 'P':
+                            export_img = export_img.convert('RGBA')
+                        if export_img.mode in ('RGBA', 'LA'):
+                            bg.paste(export_img, mask=export_img.split()[3])
+                        export_img = bg
+                    buf = io.BytesIO()
+                    export_img.save(buf, format="JPEG", quality=95)
+                    mime_type = "image/jpeg"
+                    file_ext = "jpg"
+                else:  # WEBP
+                    buf = io.BytesIO()
+                    export_img.save(buf, format="WEBP", quality=95)
+                    mime_type = "image/webp"
+                    file_ext = "webp"
+                
+                col_dl1, col_dl2, col_dl3 = st.columns(3)
                 
                 with col_dl2:
-                    # JPEG download (for smaller file size)
-                    if result_img.mode in ('RGBA', 'LA', 'P'):
-                        jpeg_img = Image.new('RGB', result_img.size, (255, 255, 255))
-                        if result_img.mode == 'P':
-                            result_img = result_img.convert('RGBA')
-                        jpeg_img.paste(result_img, mask=result_img.split()[-1] if result_img.mode in ('RGBA', 'LA') else None)
-                    else:
-                        jpeg_img = result_img
-                    
-                    buf_jpg = io.BytesIO()
-                    jpeg_img.save(buf_jpg, format="JPEG", quality=95)
                     st.download_button(
-                        "⬇️ Download JPEG",
-                        data=buf_jpg.getvalue(),
-                        file_name="element_prep_result.jpg",
-                        mime="image/jpeg",
+                        f"⬇️ Download {output_format.split()[0]}",
+                        data=buf.getvalue(),
+                        file_name=f"element_prep_result.{file_ext}",
+                        mime=mime_type,
                         use_container_width=True
                     )
                 
@@ -357,11 +688,13 @@ else:
             <p>Upload an image above to begin transforming your creative elements!</p>
             <p><strong>Perfect for:</strong></p>
             <ul>
-                <li>Poster design elements</li>
-                <li>Social media content</li>
-                <li>Product photography</li>
-                <li>Digital art projects</li>
+                <li>🎨 Poster design elements</li>
+                <li>📱 Social media content</li>
+                <li>📦 Product photography</li>
+                <li>🎭 Digital art projects</li>
+                <li>🖼️ Print-ready graphics</li>
             </ul>
+            <p><strong>Pro tip:</strong> Use the sidebar to choose quick presets for common workflows!</p>
         </div>
     """, unsafe_allow_html=True)
 
