@@ -3,6 +3,5 @@ rembg
 pillow
 torch
 torchvision
-basicsr
 realesrgan
 onnxruntime-cpu
