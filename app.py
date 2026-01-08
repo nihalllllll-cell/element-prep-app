@@ -578,7 +578,7 @@ def advanced_sharpen(image: Image.Image, amount: float = 1.5) -> Image.Image:
 # Header
 st.markdown("""
     <div class="title-container">
-        <h1 class="title-text">✨ Element Prep Studio Pro</h1>
+        <h1 class="title-text">✨ Hania Dont't Crash Out</h1>
         <p class="subtitle-text">All your design prep work in one place - remove backgrounds, enhance, and export perfectly</p>
     </div>
 """, unsafe_allow_html=True)
