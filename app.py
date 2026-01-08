@@ -1,9 +1,10 @@
 import streamlit as st
-from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageFont
+from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageFont, ImageOps
 from rembg import remove
 import io
 import numpy as np
 from typing import Tuple
+import gc
 
 # Page config with custom theme
 st.set_page_config(
@@ -408,6 +409,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Helper functions
+def optimize_image_for_processing(image: Image.Image, max_dimension: int = 4096) -> Tuple[Image.Image, float]:
+    """Optimize image size for processing if too large, return scale factor"""
+    width, height = image.size
+    max_current = max(width, height)
+    
+    if max_current > max_dimension:
+        scale = max_dimension / max_current
+        new_size = (int(width * scale), int(height * scale))
+        return image.resize(new_size, Image.Resampling.LANCZOS), scale
+    return image, 1.0
+
+def restore_original_scale(image: Image.Image, original_size: Tuple[int, int]) -> Image.Image:
+    """Restore image to original dimensions if it was scaled down"""
+    if image.size != original_size:
+        return image.resize(original_size, Image.Resampling.LANCZOS)
+    return image
+
 def add_shadow(image: Image.Image, offset: Tuple[int, int] = (5, 5), 
                blur: int = 10, opacity: int = 128) -> Image.Image:
     """Add drop shadow to image with transparency"""
@@ -461,21 +479,101 @@ def auto_crop_transparent(image: Image.Image, margin: int = 0) -> Image.Image:
         return image.crop(bbox)
     return image
 
-def smart_denoise(image: Image.Image, strength: int = 2) -> Image.Image:
+def smart_upscale(image: Image.Image, factor: int) -> Image.Image:
+    """Advanced upscaling with multiple passes for better quality"""
+    if factor == 1:
+        return image
+    
+    # Check if image is too large for upscaling
+    current_pixels = image.size[0] * image.size[1]
+    target_pixels = current_pixels * (factor ** 2)
+    max_pixels = 178_956_970  # PIL max pixel limit
+    
+    if target_pixels > max_pixels:
+        # Calculate maximum safe factor
+        safe_factor = int((max_pixels / current_pixels) ** 0.5)
+        st.warning(f"⚠️ Image too large for {factor}x upscale. Using maximum safe factor: {safe_factor}x")
+        factor = max(safe_factor, 1)
+        if factor == 1:
+            return image
+    
+    # Multi-pass upscaling for factors > 2
+    current_img = image
+    remaining_factor = factor
+    
+    while remaining_factor > 1.01:  # Allow for floating point precision
+        # Upscale by 2x max per pass for better quality
+        step_factor = min(2.0, remaining_factor)
+        new_size = (
+            int(current_img.size[0] * step_factor),
+            int(current_img.size[1] * step_factor)
+        )
+        
+        # Validate size before processing
+        if new_size[0] * new_size[1] > max_pixels:
+            st.warning("⚠️ Reached maximum image size limit")
+            break
+        
+        # Use LANCZOS for high quality resampling
+        current_img = current_img.resize(new_size, Image.Resampling.LANCZOS)
+        
+        # Apply slight sharpening after upscale to compensate for blur
+        if remaining_factor > 2:
+            enhancer = ImageEnhance.Sharpness(current_img)
+            current_img = enhancer.enhance(1.15)
+        
+        remaining_factor = remaining_factor / step_factor
+        
+        # Memory cleanup
+        gc.collect()
+    
+    return current_img
     """Intelligent noise reduction"""
     return image.filter(ImageFilter.MedianFilter(size=strength * 2 + 1))
 
 def edge_enhance(image: Image.Image, factor: float = 1.5) -> Image.Image:
-    """Enhance edges for crisp elements"""
+    """Enhance edges for crisp elements with smart blending"""
+    # Apply edge enhancement
     enhanced = image.filter(ImageFilter.EDGE_ENHANCE_MORE)
-    return Image.blend(image, enhanced, factor / 10)
+    
+    # Blend more carefully to avoid over-enhancement
+    blend_factor = min(factor / 10, 0.3)  # Cap at 30% blend
+    return Image.blend(image, enhanced, blend_factor)
 
 def color_pop(image: Image.Image, saturation: float = 1.5) -> Image.Image:
-    """Boost color saturation"""
-    if image.mode != 'RGB' and image.mode != 'RGBA':
+    """Boost color saturation intelligently"""
+    if image.mode not in ['RGB', 'RGBA']:
         return image
+    
+    # Cap saturation to avoid oversaturation
+    safe_saturation = min(saturation, 2.0)
     enhancer = ImageEnhance.Color(image)
-    return enhancer.enhance(saturation)
+    return enhancer.enhance(safe_saturation)
+
+def advanced_sharpen(image: Image.Image, amount: float = 1.5) -> Image.Image:
+    """Advanced sharpening with unsharp mask technique"""
+    # Create slightly blurred version
+    blurred = image.filter(ImageFilter.GaussianBlur(radius=1))
+    
+    # Calculate sharpening amount
+    sharp_amount = min(amount, 3.0)  # Cap to prevent artifacts
+    
+    # Apply unsharp mask manually
+    if image.mode == 'RGBA':
+        # Process RGB channels only
+        alpha = image.split()[3]
+        rgb = Image.merge('RGB', image.split()[:3])
+        rgb_blur = Image.merge('RGB', blurred.split()[:3])
+        
+        # Enhance sharpness
+        enhancer = ImageEnhance.Sharpness(rgb)
+        rgb_sharp = enhancer.enhance(sharp_amount)
+        
+        result = Image.merge('RGBA', (*rgb_sharp.split(), alpha))
+        return result
+    else:
+        enhancer = ImageEnhance.Sharpness(image)
+        return enhancer.enhance(sharp_amount)
 
 # Header
 st.markdown("""
@@ -592,8 +690,24 @@ with col_info:
 
 if uploaded_file:
     # Load and display original image
-    image = Image.open(uploaded_file)
-    original_size = image.size
+    try:
+        image = Image.open(uploaded_file)
+        original_size = image.size
+        
+        # Validate image
+        if image.size[0] * image.size[1] > 178_956_970:
+            st.error("❌ Image is too large! Maximum supported size is ~178 megapixels.")
+            st.stop()
+        
+        # Convert palette images to RGBA for better processing
+        if image.mode == 'P':
+            image = image.convert('RGBA')
+        elif image.mode == 'L':
+            image = image.convert('RGB')
+            
+    except Exception as e:
+        st.error(f"❌ Error loading image: {str(e)}")
+        st.stop()
     
     # Display original
     st.markdown("### 📸 Original Image")
@@ -601,10 +715,14 @@ if uploaded_file:
     with col2:
         st.image(image, use_container_width=True)
     
+    # Calculate file size
+    file_size_kb = round(uploaded_file.size / 1024, 1)
+    file_size_display = f"{file_size_kb} KB" if file_size_kb < 1024 else f"{round(file_size_kb/1024, 1)} MB"
+    
     st.markdown(f"""
         <div class="info-box">
             <strong>Image Info:</strong> {original_size[0]} × {original_size[1]} pixels | 
-            {image.mode} | {round(uploaded_file.size / 1024, 1)} KB
+            {image.mode} | {file_size_display}
         </div>
     """, unsafe_allow_html=True)
     
@@ -621,13 +739,19 @@ if uploaded_file:
         upscale_factor = config.get("upscale_factor", 2)
         enhance_quality = config.get("enhance_quality", False)
         sharpness = config.get("sharpness", 1.5)
-        adjust_colors = config.get("adjust_colors", False)
+        adjust_colors = False
+        brightness = 1.0
+        contrast = 1.0
+        saturation = 1.0
         auto_crop = config.get("auto_crop", False)
         add_shadow_effect = config.get("add_shadow", False)
+        shadow_blur = 10
+        shadow_opacity = 128
         denoise = config.get("denoise", False)
         color_boost = config.get("color_boost", False)
         edge_enhance_effect = config.get("edge_enhance", False)
         add_padding_effect = config.get("add_padding", False)
+        padding_size = 50
         
         st.info(f"🎯 Using **{preset}** preset - all settings optimized!")
     else:
@@ -647,10 +771,10 @@ if uploaded_file:
                 adjust_colors = st.checkbox("🎨 Adjust Colors", value=False, 
                                            help="Fine-tune brightness and contrast")
             
-            if upscale:
+            if enhance_quality:
                 upscale_factor = st.select_slider(
                     "Upscale Factor",
-                    options=[2, 3, 4, 5],
+                    options=[2, 3, 4, 5, 6],
                     value=2,
                     help="How much to increase the image size"
                 )
@@ -658,7 +782,8 @@ if uploaded_file:
                 upscale_factor = 1
             
             if enhance_quality:
-                sharpness = st.slider("Sharpness", 0.0, 3.0, 1.5, 0.1)
+                sharpness = st.slider("Sharpness", 0.0, 3.0, 1.5, 0.1,
+                                     help="Higher values = sharper (may show artifacts above 2.5)")
             else:
                 sharpness = 1.0
         
@@ -676,6 +801,7 @@ if uploaded_file:
                                          help="Increase color saturation")
             
             if adjust_colors:
+                st.markdown("**Color Controls**")
                 col_a, col_b = st.columns(2)
                 with col_a:
                     brightness = st.slider("Brightness", 0.5, 2.0, 1.0, 0.1)
@@ -705,7 +831,7 @@ if uploaded_file:
                 if add_padding_effect:
                     padding_size = st.slider("Padding Size", 10, 200, 50)
                 else:
-                    padding_size = 0
+                    padding_size = 50
     
     st.markdown("---")
     
@@ -713,93 +839,131 @@ if uploaded_file:
     if st.button("🚀 Process Image", type="primary", use_container_width=True):
         with st.spinner("✨ Working magic on your image..."):
             try:
+                # Memory management
                 result_img = image.copy()
                 steps_completed = []
+                processing_errors = []
                 
                 # Progress tracking
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
+                # Optimize image size if needed for processing
+                processing_img, scale_factor = optimize_image_for_processing(result_img)
+                if scale_factor < 1.0:
+                    st.info(f"ℹ️ Temporarily scaled image to {int(scale_factor * 100)}% for processing")
+                    result_img = processing_img
+                
                 # Step 1: Remove background
                 if remove_bg:
                     status_text.text("🎭 Removing background...")
                     progress_bar.progress(10)
-                    uploaded_file.seek(0)
-                    img_bytes = uploaded_file.read()
-                    output = remove(img_bytes)
-                    result_img = Image.open(io.BytesIO(output))
-                    steps_completed.append("Background removed")
+                    try:
+                        uploaded_file.seek(0)
+                        img_bytes = uploaded_file.read()
+                        output = remove(img_bytes)
+                        result_img = Image.open(io.BytesIO(output))
+                        steps_completed.append("Background removed")
+                    except Exception as e:
+                        processing_errors.append(f"Background removal: {str(e)}")
+                        st.warning("⚠️ Background removal failed, continuing with original image")
                     progress_bar.progress(25)
+                    gc.collect()
                 
                 # Step 2: Auto-crop
                 if auto_crop and result_img.mode == 'RGBA':
                     status_text.text("✂️ Auto-cropping...")
-                    result_img = auto_crop_transparent(result_img, margin=10)
-                    steps_completed.append("Auto-cropped")
+                    try:
+                        result_img = auto_crop_transparent(result_img, margin=10)
+                        steps_completed.append("Auto-cropped")
+                    except Exception as e:
+                        processing_errors.append(f"Auto-crop: {str(e)}")
                     progress_bar.progress(35)
                 
                 # Step 3: Denoise
                 if denoise:
                     status_text.text("🧹 Denoising...")
-                    result_img = smart_denoise(result_img)
-                    steps_completed.append("Denoised")
+                    try:
+                        result_img = smart_denoise(result_img, strength=2)
+                        steps_completed.append("Denoised")
+                    except Exception as e:
+                        processing_errors.append(f"Denoise: {str(e)}")
                     progress_bar.progress(45)
                 
                 # Step 4: Edge enhancement
                 if edge_enhance_effect:
                     status_text.text("🔲 Enhancing edges...")
-                    result_img = edge_enhance(result_img, 1.5)
-                    steps_completed.append("Edges enhanced")
+                    try:
+                        result_img = edge_enhance(result_img, 1.5)
+                        steps_completed.append("Edges enhanced")
+                    except Exception as e:
+                        processing_errors.append(f"Edge enhancement: {str(e)}")
                     progress_bar.progress(55)
                 
-                # Step 5: Enhance quality
+                # Step 5: Enhance quality (Advanced sharpening)
                 if enhance_quality:
                     status_text.text("✨ Enhancing quality...")
-                    enhancer = ImageEnhance.Sharpness(result_img)
-                    result_img = enhancer.enhance(sharpness)
-                    steps_completed.append("Quality enhanced")
+                    try:
+                        result_img = advanced_sharpen(result_img, sharpness)
+                        steps_completed.append("Quality enhanced")
+                    except Exception as e:
+                        processing_errors.append(f"Quality enhancement: {str(e)}")
                     progress_bar.progress(65)
                 
                 # Step 6: Color adjustments
                 if adjust_colors or color_boost:
                     status_text.text("🎨 Adjusting colors...")
-                    if adjust_colors:
-                        enhancer = ImageEnhance.Brightness(result_img)
-                        result_img = enhancer.enhance(brightness)
-                        enhancer = ImageEnhance.Contrast(result_img)
-                        result_img = enhancer.enhance(contrast)
-                    if color_boost:
-                        result_img = color_pop(result_img, 1.3)
-                    steps_completed.append("Colors adjusted")
+                    try:
+                        if adjust_colors:
+                            enhancer = ImageEnhance.Brightness(result_img)
+                            result_img = enhancer.enhance(brightness)
+                            enhancer = ImageEnhance.Contrast(result_img)
+                            result_img = enhancer.enhance(contrast)
+                        if color_boost:
+                            result_img = color_pop(result_img, 1.3)
+                        steps_completed.append("Colors adjusted")
+                    except Exception as e:
+                        processing_errors.append(f"Color adjustment: {str(e)}")
                     progress_bar.progress(75)
                 
                 # Step 7: Upscale
                 if upscale and upscale_factor > 1:
-                    status_text.text("📈 Upscaling image...")
-                    new_size = (
-                        int(result_img.size[0] * upscale_factor),
-                        int(result_img.size[1] * upscale_factor)
-                    )
-                    result_img = result_img.resize(new_size, Image.Resampling.LANCZOS)
-                    steps_completed.append(f"Upscaled {upscale_factor}x")
+                    status_text.text("📈 Upscaling image with advanced algorithm...")
+                    try:
+                        result_img = smart_upscale(result_img, upscale_factor)
+                        steps_completed.append(f"Upscaled {upscale_factor}x (multi-pass)")
+                    except Exception as e:
+                        processing_errors.append(f"Upscaling: {str(e)}")
+                        st.warning(f"⚠️ Upscaling failed: {str(e)}")
                     progress_bar.progress(85)
+                    gc.collect()
                 
                 # Step 8: Add effects
                 if add_shadow_effect and result_img.mode == 'RGBA':
                     status_text.text("🌑 Adding shadow...")
-                    result_img = add_shadow(result_img, offset=(5, 5), 
-                                          blur=shadow_blur, opacity=shadow_opacity)
-                    steps_completed.append("Shadow added")
+                    try:
+                        result_img = add_shadow(result_img, offset=(5, 5), 
+                                              blur=shadow_blur, opacity=shadow_opacity)
+                        steps_completed.append("Shadow added")
+                    except Exception as e:
+                        processing_errors.append(f"Shadow: {str(e)}")
                     progress_bar.progress(92)
                 
                 if add_padding_effect:
                     status_text.text("📐 Adding padding...")
-                    result_img = add_padding(result_img, padding_size)
-                    steps_completed.append("Padding added")
+                    try:
+                        result_img = add_padding(result_img, padding_size)
+                        steps_completed.append("Padding added")
+                    except Exception as e:
+                        processing_errors.append(f"Padding: {str(e)}")
                     progress_bar.progress(96)
                 
                 progress_bar.progress(100)
                 status_text.text("✅ Complete!")
+                
+                # Show warnings if any
+                if processing_errors:
+                    st.warning(f"⚠️ Some operations had issues: {', '.join(processing_errors)}")
                 
                 # Success message
                 st.markdown(f"""
@@ -815,10 +979,12 @@ if uploaded_file:
                     st.image(result_img, use_container_width=True)
                 
                 final_size = result_img.size
+                size_increase = (final_size[0] * final_size[1]) / (original_size[0] * original_size[1])
+                
                 st.markdown(f"""
                     <div class="info-box">
                         <strong>Final Size:</strong> {final_size[0]} × {final_size[1]} pixels 
-                        ({final_size[0] * final_size[1] / (original_size[0] * original_size[1]):.1f}x original resolution)
+                        ({size_increase:.1f}x resolution increase)
                     </div>
                 """, unsafe_allow_html=True)
                 
