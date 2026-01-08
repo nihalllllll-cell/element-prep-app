@@ -8,7 +8,7 @@ import gc
 
 # Page config with custom theme
 st.set_page_config(
-    page_title="Element Prep Studio Pro",
+    page_title="Hania Don't Crash Out",
     page_icon="✨",
     layout="wide",
     initial_sidebar_state="expanded"
