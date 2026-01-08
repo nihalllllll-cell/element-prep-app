@@ -479,8 +479,8 @@ def auto_crop_transparent(image: Image.Image, margin: int = 0) -> Image.Image:
         return image.crop(bbox)
     return image
 
-def smart_upscale(image: Image.Image, factor: int) -> Image.Image:
-    """Advanced upscaling with multiple passes for better quality"""
+def smart_upscale(image: Image.Image, factor: int, quality_mode: str = "balanced") -> Image.Image:
+    """Ultra-advanced upscaling with multiple quality modes and AI-like techniques"""
     if factor == 1:
         return image
     
@@ -490,42 +490,109 @@ def smart_upscale(image: Image.Image, factor: int) -> Image.Image:
     max_pixels = 178_956_970  # PIL max pixel limit
     
     if target_pixels > max_pixels:
-        # Calculate maximum safe factor
         safe_factor = int((max_pixels / current_pixels) ** 0.5)
         st.warning(f"⚠️ Image too large for {factor}x upscale. Using maximum safe factor: {safe_factor}x")
         factor = max(safe_factor, 1)
         if factor == 1:
             return image
     
-    # Multi-pass upscaling for factors > 2
-    current_img = image
-    remaining_factor = factor
+    current_img = image.copy()
+    remaining_factor = float(factor)
     
-    while remaining_factor > 1.01:  # Allow for floating point precision
-        # Upscale by 2x max per pass for better quality
-        step_factor = min(2.0, remaining_factor)
+    # Quality mode settings
+    if quality_mode == "maximum":
+        sharpen_per_pass = 1.3
+        final_sharpen = 1.8
+        use_unsharp = True
+        passes = 3 if factor > 2 else 2
+    elif quality_mode == "balanced":
+        sharpen_per_pass = 1.2
+        final_sharpen = 1.4
+        use_unsharp = True
+        passes = 2
+    else:  # fast
+        sharpen_per_pass = 1.1
+        final_sharpen = 1.2
+        use_unsharp = False
+        passes = 1
+    
+    pass_count = 0
+    
+    while remaining_factor > 1.01:
+        # Calculate step factor
+        if remaining_factor >= 4 and passes > 2:
+            step_factor = 2.0
+        elif remaining_factor >= 2:
+            step_factor = 2.0
+        else:
+            step_factor = remaining_factor
+        
         new_size = (
             int(current_img.size[0] * step_factor),
             int(current_img.size[1] * step_factor)
         )
         
-        # Validate size before processing
         if new_size[0] * new_size[1] > max_pixels:
             st.warning("⚠️ Reached maximum image size limit")
             break
         
-        # Use LANCZOS for high quality resampling
+        # Pre-sharpening to preserve details before upscale
+        if quality_mode in ["balanced", "maximum"] and pass_count > 0:
+            current_img = advanced_sharpen(current_img, 1.1)
+        
+        # Upscale using LANCZOS
         current_img = current_img.resize(new_size, Image.Resampling.LANCZOS)
         
-        # Apply slight sharpening after upscale to compensate for blur
-        if remaining_factor > 2:
-            enhancer = ImageEnhance.Sharpness(current_img)
-            current_img = enhancer.enhance(1.15)
+        # Post-processing after upscale
+        if remaining_factor > 1.5:
+            # Apply sharpening
+            current_img = advanced_sharpen(current_img, sharpen_per_pass)
+            
+            # Apply subtle edge enhancement for crispness
+            if quality_mode == "maximum":
+                enhanced = current_img.filter(ImageFilter.EDGE_ENHANCE)
+                current_img = Image.blend(current_img, enhanced, 0.15)
         
         remaining_factor = remaining_factor / step_factor
-        
-        # Memory cleanup
+        pass_count += 1
         gc.collect()
+    
+    # Final quality pass
+    if use_unsharp and factor >= 2:
+        # Create unsharp mask effect
+        blurred = current_img.filter(ImageFilter.GaussianBlur(radius=2))
+        
+        if current_img.mode == 'RGBA':
+            # Process RGB only, preserve alpha
+            alpha = current_img.split()[3]
+            rgb = Image.merge('RGB', current_img.split()[:3])
+            rgb_blur = Image.merge('RGB', blurred.split()[:3])
+            
+            # Unsharp mask formula: original + (original - blurred) * amount
+            rgb_array = np.array(rgb, dtype=np.float32)
+            blur_array = np.array(rgb_blur, dtype=np.float32)
+            
+            sharpened = rgb_array + (rgb_array - blur_array) * 0.8
+            sharpened = np.clip(sharpened, 0, 255).astype(np.uint8)
+            
+            rgb_result = Image.fromarray(sharpened, 'RGB')
+            current_img = Image.merge('RGBA', (*rgb_result.split(), alpha))
+        else:
+            if current_img.mode == 'RGB':
+                img_array = np.array(current_img, dtype=np.float32)
+                blur_array = np.array(blurred, dtype=np.float32)
+                
+                sharpened = img_array + (img_array - blur_array) * 0.8
+                sharpened = np.clip(sharpened, 0, 255).astype(np.uint8)
+                
+                current_img = Image.fromarray(sharpened, 'RGB')
+            else:
+                current_img = advanced_sharpen(current_img, final_sharpen)
+    
+    # Final subtle clarity boost
+    if quality_mode == "maximum":
+        enhancer = ImageEnhance.Contrast(current_img)
+        current_img = enhancer.enhance(1.05)
     
     return current_img
     """Intelligent noise reduction"""
@@ -619,6 +686,7 @@ preset_configs = {
     "Social Media": {
         "remove_bg": True,
         "upscale_factor": 2,
+        "upscale_quality": "Balanced",
         "enhance_quality": True,
         "sharpness": 1.5,
         "auto_crop": True,
@@ -628,6 +696,7 @@ preset_configs = {
     "Print Design": {
         "remove_bg": True,
         "upscale_factor": 4,
+        "upscale_quality": "Maximum Quality",
         "enhance_quality": True,
         "sharpness": 2.0,
         "denoise": True,
@@ -636,6 +705,7 @@ preset_configs = {
     "Web Graphics": {
         "remove_bg": True,
         "upscale_factor": 2,
+        "upscale_quality": "Fast",
         "enhance_quality": True,
         "sharpness": 1.2,
         "auto_crop": True
@@ -643,6 +713,7 @@ preset_configs = {
     "Product Shot": {
         "remove_bg": True,
         "upscale_factor": 3,
+        "upscale_quality": "Maximum Quality",
         "enhance_quality": True,
         "sharpness": 2.0,
         "add_shadow": True,
@@ -652,6 +723,7 @@ preset_configs = {
     "Max Quality": {
         "remove_bg": True,
         "upscale_factor": 4,
+        "upscale_quality": "Maximum Quality",
         "enhance_quality": True,
         "sharpness": 2.5,
         "denoise": True,
@@ -737,6 +809,7 @@ if uploaded_file:
         remove_bg = config.get("remove_bg", False)
         upscale = config.get("upscale_factor", 2) > 1
         upscale_factor = config.get("upscale_factor", 2)
+        upscale_quality = config.get("upscale_quality", "Balanced")
         enhance_quality = config.get("enhance_quality", False)
         sharpness = config.get("sharpness", 1.5)
         adjust_colors = False
@@ -763,25 +836,36 @@ if uploaded_file:
             with col1:
                 remove_bg = st.checkbox("🎭 Remove Background", value=True, 
                                        help="AI-powered background removal")
+                upscale = st.checkbox("📈 Upscale Image", value=True, 
+                                     help="Increase resolution with advanced algorithm")
+            with col2:
                 enhance_quality = st.checkbox("✨ Enhance Quality", value=False, 
                                              help="Improve sharpness and clarity")
-            with col2:
-                upscale = st.checkbox("📈 Upscale Image", value=True, 
-                                     help="Increase resolution 2x, 3x, or 4x")
                 adjust_colors = st.checkbox("🎨 Adjust Colors", value=False, 
                                            help="Fine-tune brightness and contrast")
             
-            if enhance_quality:
+            if upscale:
+                st.markdown("**Upscale Settings**")
                 upscale_factor = st.select_slider(
                     "Upscale Factor",
                     options=[2, 3, 4, 5, 6],
                     value=2,
-                    help="How much to increase the image size"
+                    help="Higher = larger output"
+                )
+                
+                upscale_quality = st.radio(
+                    "Quality Mode",
+                    ["Fast", "Balanced", "Maximum Quality"],
+                    index=1,
+                    horizontal=True,
+                    help="Maximum Quality: Best results but slower"
                 )
             else:
                 upscale_factor = 1
+                upscale_quality = "Balanced"
             
             if enhance_quality:
+                st.markdown("**Quality Enhancement**")
                 sharpness = st.slider("Sharpness", 0.0, 3.0, 1.5, 0.1,
                                      help="Higher values = sharper (may show artifacts above 2.5)")
             else:
@@ -928,10 +1012,15 @@ if uploaded_file:
                 
                 # Step 7: Upscale
                 if upscale and upscale_factor > 1:
-                    status_text.text("📈 Upscaling image with advanced algorithm...")
+                    status_text.text(f"📈 Upscaling {upscale_factor}x with {upscale_quality.lower()} mode...")
                     try:
-                        result_img = smart_upscale(result_img, upscale_factor)
-                        steps_completed.append(f"Upscaled {upscale_factor}x (multi-pass)")
+                        quality_map = {
+                            "Fast": "fast",
+                            "Balanced": "balanced", 
+                            "Maximum Quality": "maximum"
+                        }
+                        result_img = smart_upscale(result_img, upscale_factor, quality_map[upscale_quality])
+                        steps_completed.append(f"Upscaled {upscale_factor}x ({upscale_quality})")
                     except Exception as e:
                         processing_errors.append(f"Upscaling: {str(e)}")
                         st.warning(f"⚠️ Upscaling failed: {str(e)}")
@@ -1006,51 +1095,65 @@ if uploaded_file:
                         target_size = export_img.size
                     
                     if target_size != export_img.size:
-                        export_img = export_img.resize(target_size, Image.Resampling.LANCZOS)
+                        # Check if target size is valid
+                        if target_size[0] * target_size[1] <= 178_956_970:
+                            export_img = export_img.resize(target_size, Image.Resampling.LANCZOS)
+                        else:
+                            st.warning("⚠️ Target export size too large, using processed size instead")
                 
                 # Prepare download based on format
-                if output_format == "PNG (Transparent)":
-                    buf = io.BytesIO()
-                    export_img.save(buf, format="PNG")
-                    mime_type = "image/png"
-                    file_ext = "png"
-                elif output_format == "PNG (White BG)":
-                    if export_img.mode == 'RGBA':
-                        bg = Image.new('RGB', export_img.size, (255, 255, 255))
-                        bg.paste(export_img, mask=export_img.split()[3])
-                        export_img = bg
-                    buf = io.BytesIO()
-                    export_img.save(buf, format="PNG")
-                    mime_type = "image/png"
-                    file_ext = "png"
-                elif output_format == "JPEG":
-                    if export_img.mode in ('RGBA', 'LA', 'P'):
-                        bg = Image.new('RGB', export_img.size, (255, 255, 255))
-                        if export_img.mode == 'P':
-                            export_img = export_img.convert('RGBA')
-                        if export_img.mode in ('RGBA', 'LA'):
+                try:
+                    if output_format == "PNG (Transparent)":
+                        buf = io.BytesIO()
+                        export_img.save(buf, format="PNG", optimize=True)
+                        mime_type = "image/png"
+                        file_ext = "png"
+                    elif output_format == "PNG (White BG)":
+                        if export_img.mode == 'RGBA':
+                            bg = Image.new('RGB', export_img.size, (255, 255, 255))
                             bg.paste(export_img, mask=export_img.split()[3])
-                        export_img = bg
-                    buf = io.BytesIO()
-                    export_img.save(buf, format="JPEG", quality=95)
-                    mime_type = "image/jpeg"
-                    file_ext = "jpg"
-                else:  # WEBP
-                    buf = io.BytesIO()
-                    export_img.save(buf, format="WEBP", quality=95)
-                    mime_type = "image/webp"
-                    file_ext = "webp"
+                            export_img = bg
+                        buf = io.BytesIO()
+                        export_img.save(buf, format="PNG", optimize=True)
+                        mime_type = "image/png"
+                        file_ext = "png"
+                    elif output_format == "JPEG":
+                        if export_img.mode in ('RGBA', 'LA', 'P'):
+                            bg = Image.new('RGB', export_img.size, (255, 255, 255))
+                            if export_img.mode == 'P':
+                                export_img = export_img.convert('RGBA')
+                            if export_img.mode in ('RGBA', 'LA'):
+                                bg.paste(export_img, mask=export_img.split()[3])
+                            export_img = bg
+                        buf = io.BytesIO()
+                        export_img.save(buf, format="JPEG", quality=95, optimize=True)
+                        mime_type = "image/jpeg"
+                        file_ext = "jpg"
+                    else:  # WEBP
+                        buf = io.BytesIO()
+                        export_img.save(buf, format="WEBP", quality=95, method=6)
+                        mime_type = "image/webp"
+                        file_ext = "webp"
+                    
+                    buf_size = len(buf.getvalue()) / 1024
+                    size_display = f"{buf_size:.1f} KB" if buf_size < 1024 else f"{buf_size/1024:.1f} MB"
+                    
+                    col_dl1, col_dl2, col_dl3 = st.columns(3)
+                    
+                    with col_dl2:
+                        st.download_button(
+                            f"⬇️ Download {output_format.split()[0]} ({size_display})",
+                            data=buf.getvalue(),
+                            file_name=f"element_prep_result.{file_ext}",
+                            mime=mime_type,
+                            use_container_width=True
+                        )
+                except Exception as e:
+                    st.error(f"❌ Export error: {str(e)}")
+                    st.info("💡 Try a different export format or reduce the image size")
                 
-                col_dl1, col_dl2, col_dl3 = st.columns(3)
-                
-                with col_dl2:
-                    st.download_button(
-                        f"⬇️ Download {output_format.split()[0]}",
-                        data=buf.getvalue(),
-                        file_name=f"element_prep_result.{file_ext}",
-                        mime=mime_type,
-                        use_container_width=True
-                    )
+                # Memory cleanup
+                gc.collect()
                 
             except Exception as e:
                 st.error(f"❌ Oops! Something went wrong: {str(e)}")
