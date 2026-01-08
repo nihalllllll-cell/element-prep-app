@@ -945,12 +945,22 @@ if uploaded_file:
                     try:
                         uploaded_file.seek(0)
                         img_bytes = uploaded_file.read()
-                        output = remove(img_bytes)
-                        result_img = Image.open(io.BytesIO(output))
-                        steps_completed.append("Background removed")
+                        
+                        # Add timeout and error handling for rembg
+                        try:
+                            output = remove(img_bytes)
+                            result_img = Image.open(io.BytesIO(output))
+                            steps_completed.append("Background removed")
+                        except Exception as rembg_error:
+                            st.warning(f"⚠️ Background removal failed: {str(rembg_error)}")
+                            st.info("💡 Continuing with original image...")
+                            result_img = image.copy()
+                            processing_errors.append(f"Background removal: {str(rembg_error)}")
+                            
                     except Exception as e:
                         processing_errors.append(f"Background removal: {str(e)}")
                         st.warning("⚠️ Background removal failed, continuing with original image")
+                        result_img = image.copy()
                     progress_bar.progress(25)
                     gc.collect()
                 
@@ -1155,8 +1165,14 @@ if uploaded_file:
                 gc.collect()
                 
             except Exception as e:
-                st.error(f"❌ Oops! Something went wrong: {str(e)}")
-                st.info("💡 Try uploading a different image or adjusting your settings.")
+                st.error(f"❌ Processing error: {str(e)}")
+                st.info("💡 Try with fewer enhancements enabled or a smaller image")
+                
+                # Show detailed error for debugging
+                with st.expander("🔍 Error Details"):
+                    st.code(str(e))
+                    import traceback
+                    st.code(traceback.format_exc())
 
 else:
     # Empty state with helpful info
