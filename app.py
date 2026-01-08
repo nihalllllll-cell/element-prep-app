@@ -8,7 +8,7 @@ import gc
 
 # Page config with custom theme
 st.set_page_config(
-    page_title="Hania Don't Crash Out",
+    page_title="Element Prep Studio Pro",
     page_icon="✨",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -645,7 +645,7 @@ def advanced_sharpen(image: Image.Image, amount: float = 1.5) -> Image.Image:
 # Header
 st.markdown("""
     <div class="title-container">
-        <h1 class="title-text">✨ Hania Don't Crash Out</h1>
+        <h1 class="title-text">✨ Element Prep Studio Pro</h1>
         <p class="subtitle-text">All your design prep work in one place - remove backgrounds, enhance, and export perfectly</p>
     </div>
 """, unsafe_allow_html=True)
@@ -785,7 +785,7 @@ if uploaded_file:
     st.markdown("### 📸 Original Image")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.image(image, use_container_width=True)
+        st.image(image, width="stretch")
     
     # Calculate file size
     file_size_kb = round(uploaded_file.size / 1024, 1)
@@ -920,7 +920,7 @@ if uploaded_file:
     st.markdown("---")
     
     # Process button
-    if st.button("🚀 Process Image", type="primary", use_container_width=True):
+    if st.button("🚀 Process Image", type="primary"):
         with st.spinner("✨ Working magic on your image..."):
             try:
                 # Memory management
@@ -1065,7 +1065,7 @@ if uploaded_file:
                 st.markdown("### 🎉 Processed Image")
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
-                    st.image(result_img, use_container_width=True)
+                    st.image(result_img, width="stretch")
                 
                 final_size = result_img.size
                 size_increase = (final_size[0] * final_size[1]) / (original_size[0] * original_size[1])
@@ -1145,8 +1145,7 @@ if uploaded_file:
                             f"⬇️ Download {output_format.split()[0]} ({size_display})",
                             data=buf.getvalue(),
                             file_name=f"element_prep_result.{file_ext}",
-                            mime=mime_type,
-                            use_container_width=True
+                            mime=mime_type
                         )
                 except Exception as e:
                     st.error(f"❌ Export error: {str(e)}")
